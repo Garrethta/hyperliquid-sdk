@@ -302,7 +302,8 @@ export class HyperliquidSDK {
     'validatorL1Votes', 'marginTable', 'perpDexs', 'webData2', 'outcomeMeta',
   ]);
 
-  private readonly _endpoint?: string;
+  private readonly _endpoint: string;
+  private readonly _builder: string;
   private readonly _timeout: number;
   private readonly _slippage: number;
   private readonly _maxFee: string;
@@ -332,7 +333,8 @@ export class HyperliquidSDK {
   private _grpc: GRPCStreamType | null = null;
   private _evmStream: EVMStreamType | null = null;
 
-  constructor(endpoint?: string, options: HyperliquidSDKOptions = {}) {
+  constructor(endpoint: string, builder: string, options: HyperliquidSDKOptions = {}) {
+    this._builder = builder;
     this._endpoint = endpoint;
     this._timeout = options.timeout ?? HyperliquidSDK.DEFAULT_TIMEOUT;
     this._slippage = options.slippage ?? HyperliquidSDK.DEFAULT_SLIPPAGE;
@@ -1909,18 +1911,14 @@ export class HyperliquidSDK {
    */
   async approveBuilderFee(
     maxFee: string = '1%',
-    builder?: string
   ): Promise<Record<string, unknown>> {
-    if (builder === undefined) {
-      builder = '0x8D62d3000eF0639d1fc9667D06BE7BB98d9993F5';
-    }
 
     const action = {
       type: 'approveBuilderFee',
       hyperliquidChain: this._chain,
       signatureChainId: this._chainId,
       maxFeeRate: maxFee,
-      builder,
+      builder: this._builder,
       nonce: Date.now(),
     };
     return this._buildSignSend(action);
@@ -1929,8 +1927,8 @@ export class HyperliquidSDK {
   /**
    * Revoke builder fee approval.
    */
-  async revokeBuilderFee(builder?: string): Promise<Record<string, unknown>> {
-    return this.approveBuilderFee('0%', builder);
+  async revokeBuilderFee(): Promise<Record<string, unknown>> {
+    return this.approveBuilderFee('0%');
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

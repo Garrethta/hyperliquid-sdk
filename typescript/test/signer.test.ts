@@ -34,10 +34,12 @@ afterEach(() => {
 });
 
 describe('external signer', () => {
+  const builder = '0x8D62d3000eF0639d1fc9667D06BE7BB98d9993F5';
+
   it('constructs with a signer only and exposes signerAddress', () => {
     delete process.env.PRIVATE_KEY;
     const addr = '0x1234567890123456789012345678901234567890';
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', {
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, {
       signer: () => ({ r: '0x1', s: '0x2', v: 27 }),
       signerAddress: addr,
     });
@@ -48,7 +50,7 @@ describe('external signer', () => {
 
   it('never reads PRIVATE_KEY env when a signer is set', () => {
     process.env.PRIVATE_KEY = '0x' + '11'.repeat(32);
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', {
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, {
       signer: () => ({ r: '0x1', s: '0x2', v: 27 }),
     });
     expect((sdk as any)._wallet).toBeNull();
@@ -61,7 +63,7 @@ describe('external signer', () => {
       seenHash = hashHex;
       return { r: '0xaa', s: '0xbb', v: 28 };
     };
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', { signer, autoApprove: false });
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, { signer, autoApprove: false });
 
     const { calls, restore } = mockExchangeFetch();
     try {
@@ -82,7 +84,7 @@ describe('external signer', () => {
       gotSignal = opts?.signal;
       return { r: '0x1', s: '0x2', v: 27 };
     };
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', { signer, autoApprove: false });
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, { signer, autoApprove: false });
 
     const { restore } = mockExchangeFetch();
     try {
@@ -97,7 +99,7 @@ describe('external signer', () => {
     delete process.env.PRIVATE_KEY;
     const boom = new Error('kms unavailable');
     const signer: Signer = () => { throw boom; };
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', { signer, autoApprove: false });
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, { signer, autoApprove: false });
 
     const { restore } = mockExchangeFetch();
     let err: unknown;
@@ -122,7 +124,7 @@ describe('external signer', () => {
   ])('wraps a malformed signer return (%s) in SignerError, never sending it', async (_label, bad) => {
     delete process.env.PRIVATE_KEY;
     const signer = (() => bad) as unknown as Signer;
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', { signer, autoApprove: false });
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, { signer, autoApprove: false });
 
     const { calls, restore } = mockExchangeFetch();
     let err: unknown;
@@ -140,7 +142,7 @@ describe('external signer', () => {
 
   it('skips builder-fee auto-approve under an external signer', async () => {
     delete process.env.PRIVATE_KEY;
-    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', {
+    const sdk = new HyperliquidSDK('https://x.quiknode.pro/T', builder, {
       signer: () => ({ r: '0x1', s: '0x2', v: 27 }),
       autoApprove: true, // would normally approve before the first trade
     });

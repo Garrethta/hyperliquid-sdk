@@ -359,7 +359,7 @@ export function parseApiError(data: Record<string, unknown>, statusCode: number 
   // Approval errors
   if (errorCode === 'NOT_APPROVED' || errorCode === 'BUILDER_APPROVAL_REQUIRED') {
     return new ApprovalError(message, {
-      guidance: guidance ?? "Builder fee not approved. Run sdk.approveBuilderFee('1%') or use HyperliquidSDK({ autoApprove: true }).",
+      guidance: guidance ?? "Builder fee not approved. Run sdk.approveBuilderFee('1%', '0x123') or use HyperliquidSDK({ autoApprove: true }).",
       approvalData: data.approvalRequired as Record<string, unknown>,
       code: errorCode,
       raw,
@@ -368,7 +368,7 @@ export function parseApiError(data: Record<string, unknown>, statusCode: number 
 
   if (errorCode === 'FEE_EXCEEDS_APPROVED') {
     return new ApprovalError(message, {
-      guidance: guidance ?? "Your approved max fee is too low. Re-approve with a higher rate: sdk.approveBuilderFee('1%')",
+      guidance: guidance ?? "Your approved max fee is too low. Re-approve with a higher rate: sdk.approveBuilderFee('1%', '0x123')",
       code: errorCode,
       raw,
     });
