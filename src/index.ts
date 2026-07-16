@@ -6,20 +6,22 @@
  * @packageDocumentation
  */
 
+export * from './types';
+
 // Main SDK client
-export { HyperliquidSDK, HyperliquidSDKOptions, PredictionMarkets, Signer, Signature } from './client';
+export { HyperliquidSDK, HyperliquidSDKOptions, PredictionMarkets, Signer } from './client';
 
 // Order builders
-export { Order, TriggerOrder, PlacedOrder, Side, TIF, TpSl, OrderGrouping } from './order';
+export { Order, TriggerOrder, PlacedOrder } from './order';
 
 // Info API client
-export { Info, InfoOptions } from './info';
+export { Info } from './info';
 
 // HyperCore JSON-RPC client
-export { HyperCore, HyperCoreOptions } from './hypercore';
+export { HyperCore } from './hypercore';
 
 // EVM JSON-RPC client
-export { EVM, EVMOptions } from './evm';
+export { EVM } from './evm';
 
 // WebSocket streaming
 export { Stream, StreamType, ConnectionState as StreamConnectionState, StreamOptions } from './websocket';
@@ -57,10 +59,3 @@ export {
 
 // Re-export commonly used types
 export type { default as WebSocket } from 'ws';
-export type {
-  AssetInput,
-  OutcomeAmount,
-  PredictionMarket,
-  PredictionMarketFilter,
-  PredictionSide,
-} from './types';
