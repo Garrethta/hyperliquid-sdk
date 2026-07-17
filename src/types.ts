@@ -334,6 +334,7 @@ export interface SpotBalance {
   hold: string;
   total: string;
   entryNtl: string;
+  token: number;
 }
 
 export interface SpotClearinghouseState {
