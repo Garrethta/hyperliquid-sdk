@@ -25,10 +25,13 @@ import { HyperCore } from './hypercore';
 import { EVM } from './evm';
 import {
   AssetInput,
+  BuildExchangeActionOptions,
+  ExchangeActionPayload,
   OutcomeAmount,
   PredictionMarket,
   PredictionMarketFilter,
   PredictionSide,
+  SignedAction,
   assetToString,
 } from './types';
 
@@ -1932,6 +1935,64 @@ export class HyperliquidSDK {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // EXTERNAL BUILD / SUBMIT
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Build an exchange action and return the payload to sign off-process.
+   *
+   * Does not require a wallet. Typical flow: backend calls this, sends the
+   * returned `hash` to the client for signing, then submits via
+   * {@link submitSignedExchangeAction}.
+   */
+  async buildExchangeAction(
+    action: Record<string, unknown>,
+    options: BuildExchangeActionOptions = {}
+  ): Promise<ExchangeActionPayload> {
+    const effectiveSlippage = options.slippage ?? this._slippage;
+    const buildPayload: Record<string, unknown> = { action, slippage: effectiveSlippage };
+    const normalizedPriorityFee = this._normalizePriorityFee(options.priorityFee);
+    if (normalizedPriorityFee !== undefined) {
+      buildPayload.priorityFee = normalizedPriorityFee;
+    }
+
+    const buildResult = await this._exchange(buildPayload);
+
+    if (!buildResult.hash) {
+      throw new BuildError('Build response missing hash', { raw: buildResult });
+    }
+    if (buildResult.nonce === undefined || buildResult.nonce === null) {
+      throw new BuildError('Build response missing nonce', { raw: buildResult });
+    }
+
+    return {
+      hash: buildResult.hash as string,
+      action: (buildResult.action ?? action) as Record<string, unknown>,
+      nonce: buildResult.nonce as number,
+    };
+  }
+
+  /**
+   * Submit a signed exchange action to the network.
+   *
+   * Does not require a wallet — pass the signature produced off-process.
+   */
+  async submitSignedExchangeAction(payload: SignedAction): Promise<Record<string, unknown>> {
+    if (!isValidSignature(payload.signature)) {
+      throw new SignerError(
+        `invalid signature (expected { r, s, v in {27,28} }): ${JSON.stringify(payload.signature)}`,
+        { guidance: 'Signature must be valid ECDSA components before submitting to the venue.' }
+      );
+    }
+
+    return this._exchange({
+      action: payload.action,
+      nonce: payload.nonce,
+      signature: payload.signature,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // INTERNAL METHODS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2053,18 +2114,7 @@ export class HyperliquidSDK {
       }
     }
 
-    // Step 1: Build
-    const effectiveSlippage = slippage ?? this._slippage;
-    const buildPayload: Record<string, unknown> = { action, slippage: effectiveSlippage };
-    const normalizedPriorityFee = this._normalizePriorityFee(priorityFee);
-    if (normalizedPriorityFee !== undefined) {
-      buildPayload.priorityFee = normalizedPriorityFee;
-    }
-    const buildResult = await this._exchange(buildPayload);
-
-    if (!buildResult.hash) {
-      throw new BuildError('Build response missing hash', { raw: buildResult });
-    }
+    const buildResult = await this.buildExchangeAction(action, { slippage, priorityFee });
 
     // Step 2: Sign. Prefer the external signer, bounding it with an AbortSignal
     // derived from the SDK timeout, and surface any failure as SignerError (the
@@ -2074,7 +2124,7 @@ export class HyperliquidSDK {
       const signController = new AbortController();
       const signTimeout = setTimeout(() => signController.abort(), this._timeout);
       try {
-        sig = await this._signer(buildResult.hash as string, { signal: signController.signal });
+        sig = await this._signer(buildResult.hash, { signal: signController.signal });
       } catch (err) {
         throw new SignerError(
           `failed to sign: ${err instanceof Error ? err.message : String(err)}`,
@@ -2096,17 +2146,14 @@ export class HyperliquidSDK {
         );
       }
     } else {
-      sig = this._signHash(buildResult.hash as string);
+      sig = this._signHash(buildResult.hash);
     }
 
-    // Step 3: Send
-    const sendPayload = {
-      action: buildResult.action ?? action,
+    return this.submitSignedExchangeAction({
+      action: buildResult.action,
       nonce: buildResult.nonce,
       signature: sig,
-    };
-
-    return this._exchange(sendPayload);
+    });
   }
 
   private _isPredictionAsset(asset: AssetInput): boolean {

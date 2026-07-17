@@ -901,3 +901,15 @@ export interface SignedAction {
   nonce: number;
   vaultAddress?: string;
 }
+
+export interface BuildExchangeActionOptions {
+  slippage?: number;
+  priorityFee?: number | string;
+}
+
+/** Payload returned by the build step, ready for off-process signing. */
+export interface ExchangeActionPayload {
+  hash: string;
+  action: Record<string, unknown>;
+  nonce: number;
+}
