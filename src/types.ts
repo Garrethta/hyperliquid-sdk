@@ -338,6 +338,7 @@ export interface SpotBalance {
 
 export interface SpotClearinghouseState {
   balances: SpotBalance[];
+  tokenToAvailableAfterMaintenance: [number, string][]
 }
 
 export interface OpenOrder {
