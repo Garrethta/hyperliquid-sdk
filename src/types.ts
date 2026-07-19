@@ -905,11 +905,25 @@ export interface SignedAction {
 export interface BuildExchangeActionOptions {
   slippage?: number;
   priorityFee?: number | string;
+  /** Optional builder code attached to L1 order actions. */
+  builder?: { b: string; f: number };
+  /** Vault address for vault trading (L1 actions). */
+  vaultAddress?: string;
+  /** Optional expiry timestamp in ms (L1 actions). */
+  expiresAfter?: number;
 }
 
-/** Payload returned by the build step, ready for off-process signing. */
+export interface ExchangeTypedData {
+  domain: Record<string, unknown>;
+  types: Record<string, Array<{ name: string; type: string }>>;
+  primaryType: string;
+  message: Record<string, unknown>;
+}
+
+/** Payload returned by the build step — sign {@link ExchangeActionPayload.typedData} with EIP-712. */
 export interface ExchangeActionPayload {
-  hash: string;
   action: Record<string, unknown>;
   nonce: number;
+  typedData: ExchangeTypedData;
+  vaultAddress?: string;
 }

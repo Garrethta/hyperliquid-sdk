@@ -11,6 +11,16 @@ export * from './types';
 // Main SDK client
 export { HyperliquidSDK, HyperliquidSDKOptions, PredictionMarkets, Signer } from './client';
 
+export {
+  MAINNET_EXCHANGE_URL,
+  TESTNET_EXCHANGE_URL,
+  buildSignPayload,
+  signExchangePayload,
+  actionHash,
+  isUserSignedAction,
+} from './signing';
+export type { BuildSignPayloadOptions, BuildSignPayloadResult } from './signing';
+
 // Order builders
 export { Order, TriggerOrder, PlacedOrder } from './order';
 

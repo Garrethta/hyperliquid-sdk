@@ -14,12 +14,18 @@ import { Wallet } from 'ethers';
 import { Order, PlacedOrder, Side, TIF, TriggerOrder, OrderGrouping } from './order';
 import {
   HyperliquidError,
-  BuildError,
   ValidationError,
   GeoBlockedError,
   SignerError,
   parseApiError,
 } from './errors';
+import { normalizeExchangeAction } from './exchange-action';
+import {
+  MAINNET_EXCHANGE_URL,
+  TESTNET_EXCHANGE_URL,
+  buildSignPayload,
+  signExchangePayload,
+} from './signing';
 import { Info } from './info';
 import { HyperCore } from './hypercore';
 import { EVM } from './evm';
@@ -188,32 +194,21 @@ function buildPredictionMarkets(outcomes: Array<Record<string, unknown>>, mids: 
   return markets;
 }
 
-/** ECDSA signature components returned by a signer. `v` is 27 or 28. */
-export interface Signature {
-  r: string;
-  s: string;
-  v: number;
-}
+import { Signature, ExchangeTypedData } from './types';
+
+export type { Signature, ExchangeTypedData };
 
 /**
- * Signs the 32-byte order hash produced by Hyperliquid's build step.
+ * Signs {@link ExchangeActionPayload.typedData} from {@link buildExchangeAction}.
  *
- * `hashHex` may be 0x-prefixed. May be sync or async. The external-signing
- * analog of an in-process wallet, letting callers sign via a remote
- * KMS/HSM/signing service without exposing a private key to the SDK. The
- * provided `signal` is an AbortSignal bounded by the SDK timeout, so a slow
- * remote signer is cancelled along with the rest of the request — honour it.
+ * May be sync or async. The external-signing analog of an in-process wallet.
+ * Honour `signal` — it is bounded by the SDK timeout.
  */
 export type Signer = (
-  hashHex: string,
+  typedData: ExchangeTypedData,
   options?: { signal?: AbortSignal }
 ) => Signature | Promise<Signature>;
 
-/**
- * Runtime guard for a signature returned by a user-supplied {@link Signer}.
- * The callback has no compile-time guarantee at runtime (callers may be plain
- * JS), so a nil/malformed result is rejected before it reaches the venue.
- */
 function isValidSignature(sig: unknown): sig is Signature {
   if (typeof sig !== 'object' || sig === null) return false;
   const s = sig as Signature;
@@ -321,6 +316,7 @@ export class HyperliquidSDK {
 
   private readonly _publicWorkerUrl: string;
   private readonly _exchangeUrl: string;
+  private readonly _nativeExchangeUrl: string;
   private readonly _infoUrl: string;
 
   // Cache
@@ -381,6 +377,7 @@ export class HyperliquidSDK {
     // Trading/exchange ALWAYS goes through the public worker
     // QuickNode /send endpoint is not used for trading
     this._exchangeUrl = `${HyperliquidSDK.DEFAULT_WORKER_URL}/exchange`;
+    this._nativeExchangeUrl = this._testnet ? TESTNET_EXCHANGE_URL : MAINNET_EXCHANGE_URL;
 
     // Auto-approve will be called on first trade if needed
   }
@@ -1939,41 +1936,45 @@ export class HyperliquidSDK {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Build an exchange action and return the payload to sign off-process.
+   * Build an exchange action locally and return the payload to sign off-process.
    *
-   * Does not require a wallet. Typical flow: backend calls this, sends the
-   * returned `hash` to the client for signing, then submits via
-   * {@link submitSignedExchangeAction}.
+   * Does not require a wallet and does not call the QuickNode worker. The payload
+   * is signed with Hyperliquid's native EIP-712 scheme and submitted via
+   * {@link submitSignedExchangeAction} to `api.hyperliquid.xyz/exchange`.
    */
   async buildExchangeAction(
     action: Record<string, unknown>,
     options: BuildExchangeActionOptions = {}
   ): Promise<ExchangeActionPayload> {
     const effectiveSlippage = options.slippage ?? this._slippage;
-    const buildPayload: Record<string, unknown> = { action, slippage: effectiveSlippage };
     const normalizedPriorityFee = this._normalizePriorityFee(options.priorityFee);
-    if (normalizedPriorityFee !== undefined) {
-      buildPayload.priorityFee = normalizedPriorityFee;
-    }
 
-    const buildResult = await this._exchange(buildPayload);
+    const wireAction = await normalizeExchangeAction(action, {
+      slippage: effectiveSlippage,
+      priorityFee: normalizedPriorityFee,
+      builder: options.builder,
+      resolveAssetIndex: (asset) => this._resolveAssetIndex(asset),
+      getMid: (asset) => this.getMid(asset),
+      getSizeDecimals: (asset) => this._getSizeDecimals(asset),
+    });
 
-    if (!buildResult.hash) {
-      throw new BuildError('Build response missing hash', { raw: buildResult });
-    }
-    if (buildResult.nonce === undefined || buildResult.nonce === null) {
-      throw new BuildError('Build response missing nonce', { raw: buildResult });
-    }
+    const signPayload = buildSignPayload(wireAction, {
+      isMainnet: !this._testnet,
+      vaultAddress: options.vaultAddress ?? null,
+      expiresAfter: options.expiresAfter ?? null,
+      signatureChainId: this._chainId,
+    });
 
     return {
-      hash: buildResult.hash as string,
-      action: (buildResult.action ?? action) as Record<string, unknown>,
-      nonce: buildResult.nonce as number,
+      action: signPayload.action,
+      nonce: signPayload.nonce,
+      typedData: signPayload.typedData,
+      vaultAddress: options.vaultAddress,
     };
   }
 
   /**
-   * Submit a signed exchange action to the network.
+   * Submit a signed exchange action to the public Hyperliquid API.
    *
    * Does not require a wallet — pass the signature produced off-process.
    */
@@ -1985,11 +1986,80 @@ export class HyperliquidSDK {
       );
     }
 
-    return this._exchange({
+    const body: Record<string, unknown> = {
       action: payload.action,
       nonce: payload.nonce,
       signature: payload.signature,
-    });
+    };
+
+    const vaultAddress = payload.vaultAddress;
+    const actionType = String(payload.action.type ?? '');
+    if (vaultAddress && !['usdClassTransfer', 'sendAsset'].includes(actionType)) {
+      body.vaultAddress = vaultAddress;
+    }
+
+    return this._postNativeExchange(body);
+  }
+
+  /** Sign a built exchange payload in-process via EIP-712. */
+  async signExchangeActionPayload(payload: ExchangeActionPayload): Promise<Signature> {
+    this._requireWallet();
+    return signExchangePayload(payload.typedData, this._wallet!);
+  }
+
+  private async _postNativeExchange(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this._timeout);
+
+    try {
+      const response = await fetch(this._nativeExchangeUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const data = await response.json() as Record<string, unknown>;
+
+      if (data.status === 'err') {
+        throw parseApiError(
+          {
+            error: 'HL_EXCHANGE_ERROR',
+            message: String(data.response ?? 'Exchange request failed'),
+            rawHlError: String(data.response ?? ''),
+          },
+          response.status
+        );
+      }
+
+      if (data.error) {
+        throw parseApiError(data, response.status);
+      }
+
+      return {
+        success: data.status === 'ok',
+        exchangeResponse: data.response ?? data,
+        ...data,
+      };
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      if (error instanceof HyperliquidError) throw error;
+
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new HyperliquidError(`Exchange request timed out after ${this._timeout}ms`, {
+            code: 'TIMEOUT',
+          });
+        }
+        throw new HyperliquidError(`Connection failed: ${error.message}`, {
+          code: 'CONNECTION_ERROR',
+        });
+      }
+      throw error;
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2124,7 +2194,7 @@ export class HyperliquidSDK {
       const signController = new AbortController();
       const signTimeout = setTimeout(() => signController.abort(), this._timeout);
       try {
-        sig = await this._signer(buildResult.hash, { signal: signController.signal });
+        sig = await this._signer(buildResult.typedData, { signal: signController.signal });
       } catch (err) {
         throw new SignerError(
           `failed to sign: ${err instanceof Error ? err.message : String(err)}`,
@@ -2146,7 +2216,7 @@ export class HyperliquidSDK {
         );
       }
     } else {
-      sig = this._signHash(buildResult.hash);
+      sig = await signExchangePayload(buildResult.typedData, this._wallet!);
     }
 
     return this.submitSignedExchangeAction({
@@ -2268,16 +2338,6 @@ export class HyperliquidSDK {
       });
     }
     return value;
-  }
-
-  private _signHash(hashHex: string): Signature {
-    const hashBytes = Buffer.from(hashHex.replace(/^0x/, ''), 'hex');
-    const sig = this._wallet!.signingKey.sign(hashBytes);
-    return {
-      r: sig.r,
-      s: sig.s,
-      v: sig.v,
-    };
   }
 
   private async _exchange(body: Record<string, unknown>): Promise<Record<string, unknown>> {
